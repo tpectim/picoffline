@@ -3,15 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>題庫管理後台 (完整匯入/匯出版)</title>
+    <title>題庫管理後台 (單機版) - 包含圖片壓縮</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 </head>
 <body class="bg-gray-100 p-8 font-sans">
 
     <div class="max-w-7xl mx-auto bg-white p-6 rounded-xl shadow-md relative">
-        <h1 class="text-3xl font-bold text-gray-800 mb-6">📚 遊戲題庫管理系統</h1>
+        <h1 class="text-3xl font-bold text-gray-800 mb-2">📚 遊戲題庫管理系統 <span class="text-sm bg-green-100 text-green-700 px-2 py-1 rounded-full align-middle">單機免網路版</span></h1>
+        
+        <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6 rounded shadow-sm text-sm text-yellow-800">
+            <p class="font-bold flex items-center gap-2">⚠️ 資料保存提醒：</p>
+            <p class="mt-1">此為單機版本，所有題目與圖片皆儲存於**目前的瀏覽器**中。瀏覽器容量有限（約 5MB），請務必定期點擊右下方 <strong class="text-green-600">「📥 匯出 JSON」</strong> 將資料下載備份至電腦。若遇容量不足，請匯出備份後刪除部分舊資料。</p>
+        </div>
 
         <div class="bg-blue-50 p-6 rounded-lg border border-blue-200 mb-8">
             <h2 class="text-xl font-bold text-blue-800 mb-2">批次新增題目</h2>
@@ -32,10 +35,11 @@
             <div class="mb-4">
                 <label class="block text-sm font-bold mb-1">上傳圖片 (可一次選取多張 🖼️)</label>
                 <input type="file" id="input-file" accept="image/*" multiple class="w-full p-2 border rounded bg-white cursor-pointer file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-blue-100 file:text-blue-700 hover:file:bg-blue-200">
+                <p class="text-xs text-gray-500 mt-1">※ 系統會自動將圖片壓縮至最大寬度 300px，以節省瀏覽器儲存空間。</p>
             </div>
             <div class="flex items-center">
                 <button onclick="saveQuestions()" id="save-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded shadow transition">
-                    批次上傳至 Firebase
+                    批次存入題庫
                 </button>
                 <span id="save-status" class="ml-4 text-sm font-bold text-gray-600"></span>
             </div>
@@ -52,7 +56,7 @@
                         🗑️ 批次刪除
                     </button>
                     <button id="batch-export-btn" onclick="exportSelectedToJson()" class="hidden bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded shadow-sm text-sm transition">
-                        📥 匯出 JSON
+                        📥 匯出選取項目
                     </button>
                 </div>
                 
@@ -65,12 +69,12 @@
                     <span id="total-count" class="text-sm font-bold text-blue-600 bg-blue-50 px-3 py-2 rounded-lg border border-blue-200 whitespace-nowrap">共 0 題</span>
                     
                     <input type="file" id="import-json-input" accept=".json" class="hidden" onchange="handleImportJson(event)">
+                    
+                    <button onclick="exportAllToJson()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded shadow-sm text-sm transition whitespace-nowrap">
+                        📥 匯出全部 JSON
+                    </button>
                     <button onclick="triggerImport()" class="bg-purple-500 hover:bg-purple-600 text-white font-bold py-2 px-4 rounded shadow-sm text-sm transition whitespace-nowrap">
                         📤 匯入 JSON
-                    </button>
-                    
-                    <button onclick="loadQuestions()" class="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded shadow-sm text-sm transition whitespace-nowrap">
-                        重新整理
                     </button>
                 </div>
             </div>
@@ -132,34 +136,65 @@
     </div>
 
     <script>
-        const firebaseConfig = {
-            apiKey: "AIzaSyAW30YA99hzb1rgMfcSySzFSKONF_txy74",
-            authDomain: "picpic-89881.firebaseapp.com",
-            projectId: "picpic-89881",
-            storageBucket: "picpic-89881.firebasestorage.app",
-            messagingSenderId: "555976169158",
-            appId: "1:555976169158:web:f5e05ebc56d95f12b9e9c7"
-        };
-        
-        firebase.initializeApp(firebaseConfig);
-        const db = firebase.firestore();
-        const collectionName = "question_bank";
-
+        // --- 核心資料狀態 ---
+        const STORAGE_KEY = "offline_question_bank";
         let allQuestions = [];
         let editingDocId = null;
         let selectedIds = new Set(); 
 
+        // 網頁載入時初始化
         window.onload = loadQuestions;
 
-        function readFileAsBase64(file) {
+        // --- 將資料寫入瀏覽器 Local Storage ---
+        function saveToLocalStorage() {
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(allQuestions));
+                return true;
+            } catch (e) {
+                if (e.name === 'QuotaExceededError' || e.message.includes('quota')) {
+                    alert("⚠️ 瀏覽器儲存空間已滿！\n請先使用「匯出 JSON」備份資料，然後刪除部分題目以釋放空間。");
+                } else {
+                    alert("儲存失敗：" + e.message);
+                }
+                return false;
+            }
+        }
+
+        // --- 前端圖片壓縮函式 (最大寬度 300px) ---
+        function compressImage(file, maxWidth = 300) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
-                reader.onload = (e) => resolve(e.target.result);
-                reader.onerror = (e) => reject(e);
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+
+                        if (width > maxWidth) {
+                            height = Math.round((height * maxWidth) / width);
+                            width = maxWidth;
+                        }
+
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+
+                        const mimeType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+                        const quality = mimeType === 'image/jpeg' ? 0.8 : undefined; 
+
+                        resolve(canvas.toDataURL(mimeType, quality));
+                    };
+                    img.onerror = (error) => reject(error);
+                    img.src = event.target.result;
+                };
+                reader.onerror = (error) => reject(error);
                 reader.readAsDataURL(file);
             });
         }
 
+        // --- 批次上傳 (單機版) ---
         async function saveQuestions() {
             const fileInput = document.getElementById('input-file');
             const statusText = document.getElementById('save-status');
@@ -180,44 +215,71 @@
                     const fileNameWithoutExt = file.name.replace(/\.[^/.]+$/, "");
                     const parts = fileNameWithoutExt.split('_');
 
+                    // 產生唯一 ID
+                    const uniqueId = "q_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5);
+
                     let qData = {
+                        id: uniqueId,
                         theme: parts[0] || document.getElementById('input-theme').value || "未分類",
                         name: parts[1] || document.getElementById('input-name').value || fileNameWithoutExt,
                         category: parts[2] || document.getElementById('input-category').value || "",
                         attr1: parts[3] || document.getElementById('input-attr1').value || "",
                         attr2: parts[4] || document.getElementById('input-attr2').value || "",
                         content: parts[5] || document.getElementById('input-content').value || "",
-                        original: await readFileAsBase64(file),
-                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                        original: await compressImage(file, 300),
+                        createdAt: Date.now() // 單機版直接使用時間戳
                     };
 
-                    await db.collection(collectionName).add(qData);
+                    allQuestions.push(qData);
                     successCount++;
                 }
-                statusText.textContent = `✅ 成功上傳 ${successCount} 張圖片！`;
-                fileInput.value = ''; 
-                loadQuestions(); 
-            } catch (error) { statusText.textContent = "❌ 發生錯誤。"; }
-            finally { saveBtn.disabled = false; saveBtn.classList.remove('opacity-50', 'cursor-not-allowed'); }
+
+                // 一次性寫入 LocalStorage
+                if (saveToLocalStorage()) {
+                    statusText.textContent = `✅ 成功存入 ${successCount} 張圖片！`;
+                    fileInput.value = ''; 
+                    renderTableAfterLoad();
+                } else {
+                    // 如果存滿了，要把剛剛塞進去的拿出來
+                    allQuestions.splice(-successCount, successCount);
+                    statusText.textContent = "❌ 儲存失敗，空間不足。";
+                }
+
+            } catch (error) { 
+                console.error(error);
+                statusText.textContent = "❌ 發生未預期的錯誤。"; 
+            } finally { 
+                saveBtn.disabled = false; 
+                saveBtn.classList.remove('opacity-50', 'cursor-not-allowed'); 
+            }
         }
 
-        async function loadQuestions() {
-            const listContainer = document.getElementById('question-list');
-            listContainer.innerHTML = '<tr><td colspan="6" class="text-center py-6 text-gray-500 font-bold">資料讀取中...</td></tr>';
-            try {
-                const snapshot = await db.collection(collectionName).orderBy('createdAt', 'desc').get();
+        // --- 讀取資料 (單機版) ---
+        function loadQuestions() {
+            const storedData = localStorage.getItem(STORAGE_KEY);
+            if (storedData) {
+                try {
+                    allQuestions = JSON.parse(storedData);
+                } catch(e) {
+                    allQuestions = [];
+                }
+            } else {
                 allQuestions = [];
-                let themesSet = new Set();
-                snapshot.forEach(doc => {
-                    let data = doc.data(); data.id = doc.id;
-                    allQuestions.push(data);
-                    if(data.theme) themesSet.add(data.theme);
-                });
-                updateThemeDropdown(themesSet);
-                selectedIds.clear(); 
-                updateBatchUI();
-                renderTable(); 
-            } catch (error) { listContainer.innerHTML = '<tr><td colspan="6" class="text-center py-6 text-red-500">讀取資料失敗。</td></tr>'; }
+            }
+            renderTableAfterLoad();
+        }
+
+        function renderTableAfterLoad() {
+            // 依建立時間排序 (最新的在前面)
+            allQuestions.sort((a, b) => b.createdAt - a.createdAt);
+            
+            let themesSet = new Set();
+            allQuestions.forEach(q => { if(q.theme) themesSet.add(q.theme); });
+            updateThemeDropdown(themesSet);
+            
+            selectedIds.clear(); 
+            updateBatchUI();
+            renderTable(); 
         }
 
         function updateThemeDropdown(themesSet) {
@@ -263,7 +325,7 @@
             `).join('');
         }
 
-        // 批次與選擇邏輯
+        // --- 批次與選擇邏輯 ---
         function toggleSelectAll(selectAll) {
             document.querySelectorAll('.row-checkbox').forEach(cb => {
                 cb.checked = selectAll.checked;
@@ -284,7 +346,7 @@
             document.getElementById('selected-count-badge').textContent = selectedIds.size;
         }
 
-        // 編輯邏輯
+        // --- 編輯單筆資料 ---
         function openEditModal(id) {
             editingDocId = id;
             const q = allQuestions.find(i => i.id === id);
@@ -292,79 +354,113 @@
             document.getElementById('edit-modal').classList.remove('hidden');
         }
         function closeEditModal() { document.getElementById('edit-modal').classList.add('hidden'); }
-        async function saveEdit() {
+        
+        function saveEdit() {
             const btn = document.getElementById('save-edit-btn'); btn.disabled = true;
-            const data = {}; ['theme','name','category','attr1','attr2','content'].forEach(f => data[f] = document.getElementById('edit-'+f).value);
-            try { await db.collection(collectionName).doc(editingDocId).update(data); closeEditModal(); loadQuestions(); } 
-            catch(e) { alert("失敗"); } finally { btn.disabled = false; }
+            const qIndex = allQuestions.findIndex(i => i.id === editingDocId);
+            
+            if (qIndex !== -1) {
+                ['theme','name','category','attr1','attr2','content'].forEach(f => {
+                    allQuestions[qIndex][f] = document.getElementById('edit-'+f).value;
+                });
+                
+                if (saveToLocalStorage()) {
+                    closeEditModal(); 
+                    renderTableAfterLoad();
+                }
+            }
+            btn.disabled = false;
         }
 
-        // 批次操作
+        // --- 批次操作 ---
         function openBatchEditModal() { document.getElementById('batch-edit-modal').classList.remove('hidden'); }
         function closeBatchEditModal() { document.getElementById('batch-edit-modal').classList.add('hidden'); }
-        async function saveBatchEdit() {
+        
+        function saveBatchEdit() {
             let updates = {};
             ['theme','category','attr1','attr2','content'].forEach(f => {
                 if(document.getElementById('batch-check-'+f).checked) updates[f] = document.getElementById('batch-'+f).value;
             });
-            if(Object.keys(updates).length === 0) return alert("請勾選欄位");
+            if(Object.keys(updates).length === 0) return alert("請勾選要修改的欄位");
+            
             const btn = document.getElementById('save-batch-btn'); btn.disabled = true;
-            try {
-                const batch = db.batch();
-                selectedIds.forEach(id => batch.update(db.collection(collectionName).doc(id), updates));
-                await batch.commit(); closeBatchEditModal(); loadQuestions();
-            } catch(e) { alert("更新失敗"); } finally { btn.disabled = false; }
+            
+            allQuestions.forEach(q => {
+                if (selectedIds.has(q.id)) {
+                    Object.assign(q, updates);
+                }
+            });
+
+            if (saveToLocalStorage()) {
+                closeBatchEditModal(); 
+                renderTableAfterLoad();
+            }
+            btn.disabled = false;
         }
-        async function batchDelete() {
-            if(!confirm("確定刪除？")) return;
-            try {
-                const batch = db.batch();
-                selectedIds.forEach(id => batch.delete(db.collection(collectionName).doc(id)));
-                await batch.commit(); loadQuestions();
-            } catch(e) { alert("刪除失敗"); }
+
+        function batchDelete() {
+            if(!confirm("確定刪除選取的資料？此動作無法復原！")) return;
+            
+            // 過濾掉被選中的 ID，保留未被選中的
+            allQuestions = allQuestions.filter(q => !selectedIds.has(q.id));
+            
+            if (saveToLocalStorage()) {
+                renderTableAfterLoad();
+            }
         }
 
         // --- 匯出功能 ---
         function exportSelectedToJson() {
             const data = allQuestions.filter(q => selectedIds.has(q.id));
+            triggerDownload(data, `題庫選取匯出_${new Date().toISOString().slice(0,10)}.json`);
+        }
+
+        function exportAllToJson() {
+            if (allQuestions.length === 0) return alert("目前沒有資料可以匯出。");
+            triggerDownload(allQuestions, `題庫完整備份_${new Date().toISOString().slice(0,10)}.json`);
+        }
+
+        function triggerDownload(data, filename) {
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = url; a.download = `題庫匯出_${new Date().toISOString().slice(0,10)}.json`;
+            a.href = url; a.download = filename;
             a.click();
+            URL.revokeObjectURL(url);
         }
 
         // --- 匯入功能 ---
         function triggerImport() { document.getElementById('import-json-input').click(); }
 
-        async function handleImportJson(event) {
+        function handleImportJson(event) {
             const file = event.target.files[0];
             if (!file) return;
 
             const reader = new FileReader();
-            reader.onload = async (e) => {
+            reader.onload = (e) => {
                 try {
-                    const data = JSON.parse(e.target.result);
-                    if (!Array.isArray(data)) return alert("格式錯誤，請選擇正確的 JSON 陣列檔案。");
+                    const importedData = JSON.parse(e.target.result);
+                    if (!Array.isArray(importedData)) return alert("格式錯誤，請選擇正確的 JSON 陣列檔案。");
 
-                    const statusText = document.getElementById('save-status');
-                    statusText.textContent = `準備匯入 ${data.length} 筆資料...`;
+                    // 為匯入的資料重新產生 ID，避免與現有資料衝突
+                    importedData.forEach(item => {
+                        item.id = "q_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5);
+                        if(!item.createdAt) item.createdAt = Date.now();
+                        allQuestions.push(item);
+                    });
 
-                    // 逐筆寫入 Firebase
-                    for (let i = 0; i < data.length; i++) {
-                        const { id, createdAt, ...cleanData } = data[i]; // 排除舊 ID
-                        cleanData.createdAt = firebase.firestore.FieldValue.serverTimestamp(); // 重新賦予建立時間
-                        await db.collection(collectionName).add(cleanData);
-                        statusText.textContent = `匯入中... (${i + 1} / ${data.length})`;
+                    if (saveToLocalStorage()) {
+                        alert(`成功匯入 ${importedData.length} 筆資料！`);
+                        renderTableAfterLoad();
+                    } else {
+                        // 若儲存失敗，把剛加入的拔除
+                        allQuestions.splice(-importedData.length, importedData.length);
                     }
 
-                    alert(`成功匯入 ${data.length} 筆資料！`);
-                    loadQuestions();
                 } catch (err) {
-                    alert("匯入失敗，請確認檔案內容。");
+                    alert("匯入失敗，請確認檔案內容格式是否正確。");
                 } finally {
                     event.target.value = ''; // 清除輸入框
-                    setTimeout(() => statusText.textContent = "", 3000);
                 }
             };
             reader.readAsText(file);
